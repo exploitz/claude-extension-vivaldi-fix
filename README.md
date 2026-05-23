@@ -87,6 +87,12 @@ node apply-patch.js ./claude-ext-patched
 
 The script will list each patch with `APPLY` or `SKIP` (skip = already patched, safe to re-run). If Anthropic refactored the bundle and an anchor no longer matches, it fails loudly with the patch name so you know where to look — [open an issue](https://github.com/exploitz/claude-extension-vivaldi-fix/issues) and I'll re-locate it.
 
+> **Optional:** pass `--bypass-block` to also short-circuit the extension's site-categorization gate so it treats every URL as allowed. This is not a bug fix — it overrides intentional Anthropic behavior. See [Optional: bypass site categorization](#optional-bypass-site-categorization) below.
+>
+> ```
+> node apply-patch.js ./claude-ext-patched --bypass-block
+> ```
+
 ### Step 4 — Load it in Vivaldi
 
 1. Open `vivaldi://extensions`.
@@ -121,9 +127,20 @@ The script makes 7 surgical edits to the extension's minified bundles plus insta
 | 5 | Global `unhandledrejection` handler installed in side panel | Catches 16+ fire-and-forget chrome.tabs.* calls |
 | 6 | Side panel resolver always uses the live active tab | URL's `?tabId=` is treated as a hint of last resort |
 | 7 | Side panel listens for `chrome.tabs.onActivated` | Updates target tab in real time when you switch tabs |
+| — | `getCategory` → `"category0"` *(opt-in, `--bypass-block`)* | Short-circuits the site-categorization gate so every URL is treated as allowed. Not a bug fix; off by default. |
 
 Total: ~50 lines of injected code into a 2.3 MB minified bundle.
 </details>
+
+## Optional: bypass site categorization
+
+The extension fetches a per-URL "category" from Anthropic and refuses to operate on URLs that come back as a blocked category — `reddit.com` is the canonical example users hit. Passing `--bypass-block` rewrites the `getCategory` function in `mcpPermissions-*.js` to always return `"category0"` (the allowed category):
+
+```
+node apply-patch.js ./claude-ext-patched --bypass-block
+```
+
+This is **not a bug fix** — Anthropic categorizes those sites on purpose. The flag is off by default so the standard invocation stays scoped to the seven tab-tracking bug fixes. Re-run with `--bypass-block` after each upstream version bump if you want this behavior to persist. The patch is idempotent and the script will `FAIL` loudly with the patch name if Anthropic refactors `getCategory`.
 
 ## Why this approach (vs. forking the extension)
 
