@@ -34,7 +34,7 @@ cd claude-extension-vivaldi-fix
 Pick the section that matches your OS. Each one ends with a `claude-ext-patched/` folder next to `apply-patch.js`, ready for Step 3.
 
 <details open>
-<summary><b>Windows (PowerShell — native, no WSL needed)</b></summary>
+<summary><b>Windows (PowerShell)</b></summary>
 
 ```powershell
 $Src = "$env:LOCALAPPDATA\Vivaldi\User Data\Default\Extensions\fcoeoabgfenejglbffodgkkbkcdhcgfn"
