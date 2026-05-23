@@ -81,14 +81,13 @@ const bundlePatches = [
     patches: [
       {
         // v5 — always prefer the live active tab over the URL's ?tabId=.
-        // v4 only fell back when the URL tab was *deleted*; if the URL pointed
-        // at a still-existing tab (e.g. chrome://extensions where the user
-        // reloaded the extension), the panel would keep using that stale tab
-        // forever. This unconditionally overrides r with whatever tab is
-        // active in the currently-focused window, treating the URL tabId as
-        // a hint of last resort.
+        // Unconditionally overrides r with whatever tab is active in the
+        // currently-focused window, treating the URL tabId as a hint of
+        // last resort. The anchor is Anthropic's original code so this
+        // applies cleanly to a fresh bundle; idempotence is handled by
+        // the repl's /*VIVALDI-FIX-v5*/ sentinel.
         name: 'sidepanel: URL tabId resolver — always prefer live active tab',
-        find: 'if(r){try{await chrome.tabs.get(r)}catch{r=void 0/*VIVALDI-FIX-v4*/}}if(!r){try{const[vfx]=await chrome.tabs.query({active:!0,lastFocusedWindow:!0});if(vfx&&vfx.id)r=vfx.id}catch{}}if(o(r),r)try{const e=await chrome.tabs.get(r);',
+        find: 'if(o(r),r)try{const e=await chrome.tabs.get(r);',
         repl: 'try{const[vfx]=await chrome.tabs.query({active:!0,lastFocusedWindow:!0});if(vfx&&vfx.id)r=vfx.id/*VIVALDI-FIX-v5*/}catch{}if(o(r),r)try{const e=await chrome.tabs.get(r);',
       },
       {
