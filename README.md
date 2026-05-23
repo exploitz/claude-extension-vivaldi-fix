@@ -1,21 +1,116 @@
 # claude-extension-vivaldi-fix
 
-A small, idempotent Node.js script that patches the **Claude in Chrome (Beta)** extension to work correctly in **Vivaldi** and other non-Chrome Chromium browsers (Brave, Arc, etc.).
+A small Node.js script that patches the **Claude in Chrome (Beta)** extension so it works correctly in **Vivaldi** (and any other Chromium-based browser whose sidebar UI re-mounts the side panel across tab switches — Brave, Arc, multi-window Chrome, etc.).
 
-## What's broken
+## Symptoms this fixes
 
-The Claude extension assumes its side panel will always be opened on, and stay on, a single specific tab. That's *usually* true in Chrome — but not in Vivaldi, where the sidebar keeps the panel mounted across tab switches, or in multi-window Chrome workflows.
-
-The user-visible symptoms are some combination of:
-
-- The side panel "gets stuck" and acts on a tab you closed minutes ago.
+- Side panel "gets stuck" and operates on a tab you closed minutes ago.
 - Claude replies "your active tab is showing an error and isn't accessible" while you're staring at a perfectly fine webpage.
-- Claude refuses to act on your real tab and offers to open a new one instead.
-- Console fills with `Uncaught (in promise) Error: No tab with id: <N>`, `No group found for main tab <N>`, or `Unchecked runtime.lastError: Cannot access a chrome:// URL`.
+- Claude refuses to use your real tab and offers to open a new one instead.
+- Console errors like:
+  - `Uncaught (in promise) Error: No tab with id: <N>`
+  - `No group found for main tab <N>`
+  - `Unchecked runtime.lastError: Cannot access a chrome:// URL`
 
-Underneath, there are five separate code defects in the extension bundle — all the same architectural pattern (async functions that throw instead of returning null, plus a React state that captures the tab ID at mount and never refreshes). This script patches them all in one shot.
+If any of those describe what you're seeing, this script will fix it.
 
-## What the script does
+## Prerequisites
+
+- **Node.js** v16 or newer ([download](https://nodejs.org/))
+- **Git**
+- Vivaldi (or another Chromium browser) with the **Claude extension installed once from the Chrome Web Store**, signed in and paired
+
+## Install
+
+### Step 1 — Clone this repo
+
+```
+git clone https://github.com/exploitz/claude-extension-vivaldi-fix.git
+cd claude-extension-vivaldi-fix
+```
+
+### Step 2 — Copy the installed extension here
+
+Pick the section that matches your OS. Each one ends with a `claude-ext-patched/` folder next to `apply-patch.js`, ready for Step 3.
+
+<details open>
+<summary><b>Windows (PowerShell — native, no WSL needed)</b></summary>
+
+```powershell
+$Src = "$env:LOCALAPPDATA\Vivaldi\User Data\Default\Extensions\fcoeoabgfenejglbffodgkkbkcdhcgfn"
+$Ver = (Get-ChildItem $Src | Sort-Object Name | Select-Object -Last 1).Name
+Copy-Item -Recurse "$Src\$Ver" .\claude-ext-patched
+Remove-Item -Recurse -Force .\claude-ext-patched\_metadata
+```
+</details>
+
+<details>
+<summary><b>Windows (WSL / Git Bash)</b></summary>
+
+```bash
+# Replace WIN_USER with your Windows username (the folder name under C:\Users\)
+WIN_USER=YourWindowsUsername
+SRC="/mnt/c/Users/$WIN_USER/AppData/Local/Vivaldi/User Data/Default/Extensions/fcoeoabgfenejglbffodgkkbkcdhcgfn"
+VER=$(ls "$SRC" | sort -V | tail -1)
+cp -r "$SRC/$VER" ./claude-ext-patched
+rm -rf ./claude-ext-patched/_metadata
+```
+</details>
+
+<details>
+<summary><b>macOS</b></summary>
+
+```bash
+SRC="$HOME/Library/Application Support/Vivaldi/Default/Extensions/fcoeoabgfenejglbffodgkkbkcdhcgfn"
+VER=$(ls "$SRC" | sort -V | tail -1)
+cp -r "$SRC/$VER" ./claude-ext-patched
+rm -rf ./claude-ext-patched/_metadata
+```
+</details>
+
+<details>
+<summary><b>Linux</b></summary>
+
+```bash
+SRC="$HOME/.config/vivaldi/Default/Extensions/fcoeoabgfenejglbffodgkkbkcdhcgfn"
+VER=$(ls "$SRC" | sort -V | tail -1)
+cp -r "$SRC/$VER" ./claude-ext-patched
+rm -rf ./claude-ext-patched/_metadata
+```
+</details>
+
+### Step 3 — Apply the patches
+
+```
+node apply-patch.js ./claude-ext-patched
+```
+
+The script will list each patch with `APPLY` or `SKIP` (skip = already patched, safe to re-run). If Anthropic refactored the bundle and an anchor no longer matches, it fails loudly with the patch name so you know where to look — [open an issue](https://github.com/exploitz/claude-extension-vivaldi-fix/issues) and I'll re-locate it.
+
+### Step 4 — Load it in Vivaldi
+
+1. Open `vivaldi://extensions`.
+2. **Remove** the Web Store "Claude" extension (not just disable — the `key` field in the manifest makes both resolve to the same extension ID and they'll conflict). Removing also prevents Vivaldi from silently auto-updating over your patched copy.
+3. Toggle **Developer mode** on (top-right of the page).
+4. Click **Load unpacked** → select the `claude-ext-patched/` folder.
+5. Confirm it appears as "Claude" v1.0.x. The extension ID will be the same as before because of the `key` field, so your login and pairing carry over.
+
+## Updating
+
+Unpacked extensions don't auto-update. When Anthropic ships a new version:
+
+1. Re-install the Web Store version inside Vivaldi temporarily.
+2. Re-run **Step 2** (copy) and **Step 3** (patch).
+3. Remove the Web Store version again and reload your unpacked copy.
+
+The script is **idempotent** — re-running it after a version bump only applies patches that aren't already in place.
+
+## How it works
+
+The script makes 7 surgical edits to the extension's minified bundles plus installs one global error handler. All five underlying defects share the same architectural pattern: async tab-lookup functions that `throw` instead of returning `null`, plus React state that captures `tabId` at mount and never refreshes.
+
+<details>
+<summary>Patch breakdown</summary>
 
 | # | Fix | Why |
 |---|-----|-----|
@@ -23,85 +118,23 @@ Underneath, there are five separate code defects in the extension bundle — all
 | 2 | `findGroupByTab` wraps `chrome.tabs.get` in try/catch | Stops unhandled promise rejection when the tab is gone |
 | 3 | `getGroupDetails` calls `initialize()` first and returns null instead of throwing | Survives MV3 service-worker restarts |
 | 4 | `setGroupIndicatorState` and `showSecondaryTabIndicators` guard the null result | Prevents cascading errors from #3 |
-| 5 | Installs a global `unhandledrejection` handler in the side panel | Catches the remaining fire-and-forget call sites (16+ of them) |
+| 5 | Global `unhandledrejection` handler installed in side panel | Catches 16+ fire-and-forget chrome.tabs.* calls |
 | 6 | Side panel resolver always uses the live active tab | URL's `?tabId=` is treated as a hint of last resort |
 | 7 | Side panel listens for `chrome.tabs.onActivated` | Updates target tab in real time when you switch tabs |
 
-Total: ~50 lines of injected code into a 2.3 MB minified bundle. The script is **idempotent** — safe to re-run after extension updates.
-
-## Install
-
-You need Node.js (any recent version) and a one-time install of the Claude extension from the Chrome Web Store inside Vivaldi.
-
-```bash
-# 1. Install the Claude extension from the Chrome Web Store in Vivaldi (one-time).
-#    Sign in and complete pairing as usual.
-
-# 2. Clone this repo somewhere
-git clone https://github.com/exploitz/claude-extension-vivaldi-fix.git
-cd claude-extension-vivaldi-fix
-
-# 3. Copy the installed extension to a writable location.
-#    Paths below assume the default install location for each OS.
-
-# --- Windows (from WSL) ---
-SRC="/mnt/c/Users/$USER/AppData/Local/Vivaldi/User Data/Default/Extensions/fcoeoabgfenejglbffodgkkbkcdhcgfn"
-
-# --- macOS ---
-# SRC="$HOME/Library/Application Support/Vivaldi/Default/Extensions/fcoeoabgfenejglbffodgkkbkcdhcgfn"
-
-# --- Linux ---
-# SRC="$HOME/.config/vivaldi/Default/Extensions/fcoeoabgfenejglbffodgkkbkcdhcgfn"
-
-VER=$(ls "$SRC" | sort -V | tail -1)
-cp -r "$SRC/$VER" ./claude-ext-patched
-rm -rf ./claude-ext-patched/_metadata        # required for "Load unpacked"
-
-# 4. Apply the patches
-node apply-patch.js ./claude-ext-patched
-```
-
-The script will print which patches were applied and which were skipped (already present). It refuses to patch ambiguously — if Anthropic refactored the bundle and an anchor string no longer matches, it fails loudly with the patch name so you know where to look.
-
-## Load the patched extension in Vivaldi
-
-1. Open `vivaldi://extensions`
-2. **Remove** the Web Store "Claude" extension (not just disable — the `key` field in the manifest makes both resolve to the same extension ID and they'll conflict). Removing it also prevents Vivaldi from silently auto-updating over your patched copy.
-3. Toggle **Developer mode** on (top-right of the page).
-4. Click **Load unpacked** → select the `claude-ext-patched/` folder.
-5. Confirm it appears as "Claude" v1.0.x. The extension ID will be the same as before because of the `key` field, so your login and pairing carry over.
-
-## When Anthropic ships an update
-
-Unpacked extensions don't auto-update. To pull in a new version:
-
-```bash
-# 1. Re-install the Web Store version temporarily inside Vivaldi.
-# 2. Re-run the copy + patch steps from "Install" above.
-# 3. Remove the Web Store version again, then reload your unpacked copy.
-```
-
-The patch script is **idempotent** and will tell you per-patch whether it was applied or already present. If Anthropic refactored a function and an anchor no longer matches, the script fails with the patch name so you know where to look. Open an issue here and we'll re-locate it.
+Total: ~50 lines of injected code into a 2.3 MB minified bundle.
+</details>
 
 ## Why this approach (vs. forking the extension)
 
-This repo intentionally ships **only the patch script**, not Anthropic's extension code. Reasons:
-
-- **License clean.** You install the official extension from the Chrome Web Store; this script only modifies your local copy. No third-party code redistribution.
-- **Version-agnostic.** The script targets minified function signatures, not specific line numbers. It works for any version Anthropic ships until they refactor those functions.
-- **Tiny diff to review.** ~250 lines of Node.js. You can read the whole thing in a few minutes before running it.
+- **License clean.** You install the official extension from the Chrome Web Store; this script only modifies your local copy. No third-party code in this repo.
+- **Version-agnostic.** The script targets minified function signatures, not line numbers. It survives upstream changes until Anthropic refactors those specific functions.
+- **Tiny diff to review.** ~250 lines of plain Node.js. You can read the whole script in a few minutes before running it.
 
 ## Reporting upstream
 
-The bugs aren't Vivaldi-specific — they're latent in Chrome too, just harder to trigger. If you have a channel to Anthropic, the relevant details:
-
-- All five bugs live in `assets/mcpPermissions-*.js` and `assets/sidepanel-*.js`.
-- Common shape: async tab-lookup functions that `throw` instead of returning `null`; React state that captures `tabId` at mount and never re-resolves.
-- Repro: open a second Vivaldi window, click into the side panel there, send a message. Or in Chrome: reload the extension while the side panel is open.
-- Fix is essentially what this script does — wrap `chrome.tabs.get` in try/catch, return null on failure, add a `chrome.tabs.onActivated` listener.
+The bugs aren't actually Vivaldi-specific — they're latent in Chrome too, just harder to trigger (reload the extension while the side panel is open, or open multiple windows). If you have a channel to Anthropic, the relevant details are in [`apply-patch.js`](./apply-patch.js) — each patch's `name` and inline comment describes the bug and the fix.
 
 ## License
 
-MIT — see `LICENSE`.
-
-The patch script itself is original work. Running it against the Claude extension produces a modified local copy of Anthropic's code; that modified copy is for personal use under whatever terms Anthropic's extension is distributed.
+MIT — see [`LICENSE`](./LICENSE).
